@@ -837,6 +837,35 @@ exports.LoadUtils = () => {
         return msg;
     };
 
+    window.WWebJS.getAlternativeWid = async (wid) => {
+        if (!wid) return null;
+
+        const ApiContact = window.require('WAWebApiContact');
+        const QueryExistsJob = window.require('WAWebQueryExistsJob');
+
+        if (wid.server === 'c.us') {
+            let lid = ApiContact.getCurrentLid(wid);
+            if (!lid) {
+                const queryResult = await QueryExistsJob.queryWidExists(wid);
+                if (!queryResult?.wid) return null;
+                lid = ApiContact.getCurrentLid(wid);
+            }
+            return lid || null;
+        }
+
+        if (wid.server === 'lid') {
+            let phone = ApiContact.getPhoneNumber(wid);
+            if (!phone) {
+                const queryResult = await QueryExistsJob.queryWidExists(wid);
+                if (!queryResult?.wid) return null;
+                phone = ApiContact.getPhoneNumber(wid);
+            }
+            return phone || null;
+        }
+
+        return null;
+    };
+
     window.WWebJS.getChat = async (chatId, { getAsModel = true } = {}) => {
         const isChannel = /@\w*newsletter\b/.test(chatId);
         const chatWid = window.require('WAWebWidFactory').createWid(chatId);
@@ -866,6 +895,23 @@ exports.LoadUtils = () => {
                         .require('WAWebFindChatAction')
                         .findOrCreateLatestChat(chatWid)
                 )?.chat;
+
+            if (!chat && /@(c\.us|lid)$/.test(chatId)) {
+                const alternativeWid =
+                    await window.WWebJS.getAlternativeWid(chatWid);
+
+                if (alternativeWid) {
+                    chat =
+                        window
+                            .require('WAWebCollections')
+                            .Chat.get(alternativeWid) ||
+                        (
+                            await window
+                                .require('WAWebFindChatAction')
+                                .findOrCreateLatestChat(alternativeWid)
+                        )?.chat;
+                }
+            }
         }
 
         return getAsModel && chat
@@ -979,6 +1025,23 @@ exports.LoadUtils = () => {
                 chat.newsletterMetadata.creationTime;
         }
 
+        if (
+            !model.isGroup &&
+            !isChannel &&
+            model.id?._serialized?.endsWith('@lid')
+        ) {
+            const phoneWid = await window.WWebJS.getAlternativeWid(chat.id);
+            if (phoneWid?._serialized?.endsWith('@c.us')) {
+                model.lid = model.id._serialized;
+                model.id = {
+                    ...model.id,
+                    _serialized: phoneWid._serialized,
+                    server: phoneWid.server,
+                    user: phoneWid.user,
+                };
+            }
+        }
+
         model.lastMessage = null;
         if (model.msgs && model.msgs.length) {
             const lastMessage = chat.lastReceivedKey
@@ -1043,8 +1106,9 @@ exports.LoadUtils = () => {
         let contact = await window
             .require('WAWebCollections')
             .Contact.find(wid);
-        if (contact.id._serialized.endsWith('@lid')) {
-            contact.id = contact.phoneNumber;
+        if (contact?.id?._serialized?.endsWith('@lid')) {
+            const phoneWid = await window.WWebJS.getAlternativeWid(contact.id);
+            phoneWid && (contact.id = phoneWid);
         }
         const bizProfile = await window
             .require('WAWebCollections')
